@@ -1,120 +1,94 @@
-from flask import Flask, jsonify, request
+from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from flask_cors import CORS
-from marshmallow import ValidationError
-from sqlalchemy.exc import IntegrityError
 
+# Initialize app
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)
 
+# Database
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///students.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Initialize db
 db = SQLAlchemy(app)
+
+# Initialize ma
 ma = Marshmallow(app)
 
-# Student model
+# Student Class/Model
 class Student(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(100), nullable=False, unique=True)
-    course = db.Column(db.String(100), nullable=False)
+    name = db.Column(db.String(100))
+    email = db.Column(db.String(100))
+    course = db.Column(db.String(100))
 
-    def __repr__(self):
-        return f'<Student {self.name}>'
+    def __init__(self, name, email, course):
+        self.name = name
+        self.email = email
+        self.course = course
 
-# Student schema
-class StudentSchema(ma.SQLAlchemyAutoSchema):
+# Student Schema
+class StudentSchema(ma.Schema):
     class Meta:
-        model = Student
+        fields = ('id', 'name', 'email', 'course')
 
+# Initialize schema
 student_schema = StudentSchema()
 students_schema = StudentSchema(many=True)
 
-# Create the database
-with app.app_context():
-    db.create_all()
-
-# Helper function to retrieve student
-def get_student_or_404(id):
-    student = Student.query.get(id)
-    if not student:
-        return None
-    return student
-
-# Routes
-
-# Get all students
-@app.route('/students', methods=['GET'])
-def get_students():
-    students = Student.query.all()
-    return students_schema.jsonify(students), 200
-
-# Add a new student
+# Create a Student
 @app.route('/students', methods=['POST'])
 def add_student():
+    data = request.json
+    print(f"Received data: {data}")
+    
+    name = data.get('name')
+    email = data.get('email')
+    course = data.get('course')
+
+    if not all([name, email, course]):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    new_student = Student(name, email, course)
+
     try:
-        # Get JSON data
-        data = request.json
-        print("Received data:", data)  # Debug line
-
-        # Validate required fields
-        name = data.get('name')
-        email = data.get('email')
-        course = data.get('course')
-
-        if not name or not email or not course:
-            return jsonify({"error": "All fields are required"}), 400
-
-        new_student = Student(name=name, email=email, course=course)
         db.session.add(new_student)
         db.session.commit()
-
-        return student_schema.jsonify(new_student), 201
-    except KeyError as e:
-        return jsonify({"error": f"Missing field: {str(e)}"}), 400
-    except IntegrityError:
-        db.session.rollback()  # Rollback session if error occurs
-        return jsonify({"error": "Email already exists"}), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        db.session.rollback()
+        return jsonify({"error": "Could not add student", "details": str(e)}), 500
 
-# Update a student
-@app.route('/students/<int:id>', methods=['PUT'])
-def update_student(id):
-    student = get_student_or_404(id)
-    if not student:
-        return jsonify({'message': 'Student not found'}), 404
+    return student_schema.jsonify(new_student), 201
 
+# Get All Students
+@app.route('/students', methods=['GET'])
+def get_students():
     try:
-        # Get JSON data
-        data = request.json
-        print("Update data:", data)  # Debug line
-
-        # Update student fields if provided
-        student.name = data.get('name', student.name)
-        student.email = data.get('email', student.email)
-        student.course = data.get('course', student.course)
-        db.session.commit()
-
-        return student_schema.jsonify(student), 200
-    except IntegrityError:
-        db.session.rollback()  # Rollback session if error occurs
-        return jsonify({"error": "Email already exists"}), 400
+        students = Student.query.all()
+        result = students_schema.dump(students)  # Use dump instead of jsonify
+        return jsonify(result), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Could not fetch students", "details": str(e)}), 500
 
-# Delete a student
+# Delete a Student
 @app.route('/students/<int:id>', methods=['DELETE'])
 def delete_student(id):
-    student = get_student_or_404(id)
+    student = Student.query.get(id)
+    
     if not student:
-        return jsonify({'message': 'Student not found'}), 404
+        return jsonify({"error": "Student not found"}), 404
+    
+    try:
+        db.session.delete(student)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": "Could not delete student", "details": str(e)}), 500
+    
+    return jsonify({"message": f"Student with id {id} has been deleted successfully"}), 200
 
-    db.session.delete(student)
-    db.session.commit()
-
-    return jsonify({'message': 'Student deleted'}), 204
-
-if __name__ == "__main__":
+# Run Server
+if __name__ == '__main__':
     app.run(debug=True)
